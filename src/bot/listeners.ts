@@ -4,8 +4,8 @@ import * as D from 'discord.js';
 import { Bot } from './bot';
 
 import { Emoji, emojis } from '../defines';
-import * as f from '../utils';
 import { Logger } from '../utils';
+import { button_cmds, context_menu_cmds, extract_custom_id, select_menu_cmds, slash_cmds } from './interactions';
 
 let in_sigint = false; // Booo, npm, boooo
 export type ListenerFunction = (this: Bot, ...args: any[]) => void;
@@ -53,6 +53,18 @@ export const fixed_listeners: { [key in keyof D.ClientEvents]?: ClientListener<k
             await this.load_servers();
         } catch (err) {
             Logger.error(`Could not load servers: ${err}`);
+        }
+
+        for (let [name, guild] of this.client.guilds.cache) {
+            if (this.get_server(guild)) {
+                // TODO Permission for funky commands?
+                guild.commands.set([
+                    {
+                        name: "Retweet",
+                        type: "MESSAGE"
+                    }
+                ]);
+            }
         }
 
         rerandomize();
@@ -225,7 +237,62 @@ export const listeners: { [key in keyof D.ClientEvents]?: ClientListener<key>} =
         }
     },
 
-    [E.GUILD_MEMBER_ADD](this: Bot, member: D.GuildMember) {
+    [E.INTERACTION_CREATE](this: Bot, interaction: D.Interaction) {
+        if (interaction.isContextMenu()) {
+            const name = interaction.commandName;
+            if (context_menu_cmds[name]) {
+                context_menu_cmds[name].call(this, interaction);
+            } else {
+                Logger.warning(`Unknown context menu interaction received: ${name}`);
+                Logger.inspect(interaction);
+            }
+        } else if (interaction.isMessageComponent()) {
+            let match = extract_custom_id(interaction.customId);
+            if (!match) {
+                Logger.warning(`Invalid custom ID: ${interaction.customId}`);
+                Logger.inspect(interaction);
+                return;
+            }
+            let {name, params, time} = match;
+            let self = this;
+
+            function call<T extends D.Interaction>(cmds: {[key: string]: Function}) {
+                let cmd = cmds[name];
+                if (!cmd) {
+                    Logger.warning(`Interaction with name ${name} does not exist`);
+                    Logger.inspect(interaction);
+                    return;
+                }
+                cmd.call(self, interaction as T, ...params);
+            }
+
+            switch (interaction.componentType) {
+                case 'BUTTON': { 
+                    call<D.ButtonInteraction>(button_cmds);
+                    break;
+                }
+                case 'SELECT_MENU': {
+                    call<D.SelectMenuInteraction>(select_menu_cmds);
+                    break;
+                }
+                default:
+                    Logger.warning(`Unknown component type received: ${interaction.componentType}`);
+                    Logger.inspect(interaction);
+            }
+        } else if (interaction.isCommand()) {
+            const name = interaction.commandName;
+            if (slash_cmds[name]) {
+                slash_cmds[name].call(this, interaction);
+            } else {
+                Logger.warning(`Unknown command received: ${name}`);
+                Logger.inspect(interaction);
+            }
+        } else {
+            Logger.warning();
+        }
+    },
+
+    async [E.GUILD_MEMBER_ADD](this: Bot, member: D.GuildMember) {
         const server = this.servers[member.guild.id];
         
         if (!server) {
